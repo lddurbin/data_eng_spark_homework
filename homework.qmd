@@ -1,0 +1,110 @@
+---
+title: "NY Taxi Data in Spark"
+author: "Lee Durbin"
+format: html
+---
+
+## Introduction
+
+This notebook demonstrates how to work with data in Spark via the sparklyr package. The purpose of this exercise is to complete the Module 5 homework for the Data Engineering Zoomcamp.
+
+## Getting Started
+
+First, we install the sparklyr package and load it in R. Let's also make sure we have the readr and fs packages too, which will help us:
+
+```{r prerequisites}
+#| eval: false
+
+install.packages(c("sparklyr", "readr", "fs"))
+
+sparklyr::spark_install()
+```
+
+Next, let's load our taxi data into a dataframe:
+
+```{r load_csv_data}
+#| output: false
+
+zip_file <- fs::dir_ls(here::here("data"), glob = "*.csv.gz")
+fhv_2019 <- readr::read_csv(zip_file)
+```
+
+Now, let's set an environment variable to point to where we've installed Java. Then we can connect to Spark and we're ready to answer the homework questions:
+
+```{r start_spark}
+#| output: false
+
+Sys.setenv(JAVA_HOME = "/usr/local/Cellar/openjdk@17/17.0.9")
+
+library(sparklyr)
+
+sc <- spark_connect(
+  master = "local",
+  spark_home = "/usr/local/Cellar/apache-spark/3.5.0/libexec"
+  )
+```
+
+
+## Question 1
+
+The first question just requires that we return the version of Spark that we're using:
+
+```{r q1}
+sparklyr::spark_version(sc) 
+```
+
+
+## Question 2
+
+Let's read the October 2019 FHV into a Spark Dataframe:
+
+```{r read_dataframe}
+tbl_fhv <- copy_to(sc, fhv_2019, "spark_fhv2019", overwrite = TRUE)
+```
+
+Next, we'll repartition the Dataframe to 6 partitions and save it to parquet:
+
+```{r partition_to_parquet}
+fhv_partitioned <- sdf_repartition(tbl_fhv, 6)
+
+parquet_dir <- here::here("data/fhv/2019/10/")
+
+sparklyr::spark_write_parquet(fhv_partitioned, parquet_dir, mode = "overwrite")
+```
+
+The answer for Question 2 requires us to get the average file size of the Parquet Files. Here's how we do that:
+
+```{r partition_sizes}
+file_info <- file.info( fs::dir_ls(parquet_dir, glob = "*.snappy.parquet"))
+
+mean(file_info$size) 
+```
+
+
+## Question 3
+
+For this question we need to filter the data to return only those trips that started on 15 October:
+
+```{r filter_15_oct}
+tbl_fhv_partitioned <- spark_read_parquet(
+  sc,
+  name = "spark_fhv2019_partitioned",
+  path = parquet_dir)
+
+oct_15 <- tbl_fhv_partitioned |>
+  filter(
+    pickup_datetime >= as.Date("2019-10-15"),
+    pickup_datetime < as.Date("2019-10-16")
+    ) |>
+  collect()
+```
+
+
+## Finish
+
+Let's make sure we close the connection to Spark now that we're done:
+
+```{r}
+spark_disconnect(sc)
+```
+
