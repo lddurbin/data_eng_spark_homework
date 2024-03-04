@@ -1,0 +1,4 @@
+- source: homework.qmd
+  netlify:
+    - id: a015a39c-24be-48e2-bd5b-71c9708654a8
+      url: 'https://creative-druid-11f23c.netlify.app'

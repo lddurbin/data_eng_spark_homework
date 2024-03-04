@@ -10,12 +10,12 @@ This notebook demonstrates how to work with data in Spark via the sparklyr packa
 
 ## Getting Started
 
-First, we install the sparklyr package and load it in R. Let's also make sure we have the readr and fs packages too, which will help us:
+First, we install the sparklyr package and load it in R. Let's also make sure we have the dplyr, readr, fs, and lubridate packages too, which will help us:
 
 ```{r prerequisites}
 #| eval: false
 
-install.packages(c("sparklyr", "readr", "fs"))
+install.packages(c("sparklyr", "dplyr", "readr", "fs", "lubridate"))
 
 sparklyr::spark_install()
 ```
@@ -26,7 +26,11 @@ Next, let's load our taxi data into a dataframe:
 #| output: false
 
 zip_file <- fs::dir_ls(here::here("data"), glob = "*.csv.gz")
-fhv_2019 <- readr::read_csv(zip_file)
+fhv_2019 <- readr::read_csv(zip_file) |> 
+  dplyr::mutate(
+    pickup_date = as.Date(pickup_datetime, tz = "America/New_York"),
+    dropoff_date = as.Date(dropOff_datetime, tz = "America/New_York")
+    )
 ```
 
 Now, let's set an environment variable to point to where we've installed Java. Then we can connect to Spark and we're ready to answer the homework questions:
@@ -80,6 +84,7 @@ file_info <- file.info( fs::dir_ls(parquet_dir, glob = "*.snappy.parquet"))
 mean(file_info$size) 
 ```
 
+Note that this will be a little higher than any of the options available for the answer, as we added two new columns into the dataframe earlier.
 
 ## Question 3
 
@@ -92,11 +97,41 @@ tbl_fhv_partitioned <- spark_read_parquet(
   path = parquet_dir)
 
 oct_15 <- tbl_fhv_partitioned |>
-  filter(
-    pickup_datetime >= as.Date("2019-10-15"),
-    pickup_datetime < as.Date("2019-10-16")
-    ) |>
+  filter(pickup_date == as.Date("2019-10-15")) |>
   collect()
+```
+
+To answer the question, we need to return the number of rows in the dataframe we've returned:
+
+```{r q3_answer}
+nrow(oct_15)
+```
+
+## Question 4
+
+What is the length of the longest trip in the dataset in hours?
+
+To determine this, we first need to calculate the number of hours for each trip. Unfortunately we can't use lubridate functions when we're querying Spark, but by calling unix_timestamp() on the pickup and dropoff times and then dividing by 3,600 we can calculate the difference ourselves:
+
+
+```{r}
+fhv_hours_diff <- tbl_fhv_partitioned |> 
+  mutate(
+    hours_difference = (
+      unix_timestamp(dropOff_datetime) - unix_timestamp(pickup_datetime)
+      ) / 3600
+    )
+```
+
+To get the answer, we'll sort our table by this newly-created column in descending order and return the first value:
+
+```{r q4_answer}
+fhv_hours_diff_arranged <- fhv_hours_diff |> 
+  dplyr::arrange(desc(hours_difference)) |> 
+  head(1) |> 
+  collect()
+
+fhv_hours_diff_arranged$hours_difference
 ```
 
 
