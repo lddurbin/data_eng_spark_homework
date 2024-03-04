@@ -20,19 +20,6 @@ install.packages(c("sparklyr", "dplyr", "readr", "fs", "lubridate"))
 sparklyr::spark_install()
 ```
 
-Next, let's load our taxi data into a dataframe:
-
-```{r load_csv_data}
-#| output: false
-
-zip_file <- fs::dir_ls(here::here("data"), glob = "*.csv.gz")
-fhv_2019 <- readr::read_csv(zip_file) |> 
-  dplyr::mutate(
-    pickup_date = as.Date(pickup_datetime, tz = "America/New_York"),
-    dropoff_date = as.Date(dropOff_datetime, tz = "America/New_York")
-    )
-```
-
 Now, let's set an environment variable to point to where we've installed Java. Then we can connect to Spark and we're ready to answer the homework questions:
 
 ```{r start_spark}
@@ -60,10 +47,15 @@ sparklyr::spark_version(sc)
 
 ## Question 2
 
-Let's read the October 2019 FHV into a Spark Dataframe:
+Let's read the October 2019 FHV data into a Spark Dataframe:
 
 ```{r read_dataframe}
-tbl_fhv <- copy_to(sc, fhv_2019, "spark_fhv2019", overwrite = TRUE)
+tbl_fhv <- spark_read_csv(
+  sc,
+  name = "spark_fhv2019",
+  path = fs::dir_ls(here::here("data"), glob = "*.csv.gz"),
+  overwrite = TRUE
+)
 ```
 
 Next, we'll repartition the Dataframe to 6 partitions and save it to parquet:
@@ -84,28 +76,32 @@ file_info <- file.info( fs::dir_ls(parquet_dir, glob = "*.snappy.parquet"))
 mean(file_info$size) 
 ```
 
-Note that this will be a little higher than any of the options available for the answer, as we added two new columns into the dataframe earlier.
 
 ## Question 3
 
-For this question we need to filter the data to return only those trips that started on 15 October:
+For this question we need to filter the data to return only those trips that started on 15 October.
 
-```{r filter_15_oct}
+First, let's use Spark to read the Parquet files we previously saved:
+
+```{r read_parquet}
 tbl_fhv_partitioned <- spark_read_parquet(
   sc,
   name = "spark_fhv2019_partitioned",
   path = parquet_dir)
-
-oct_15 <- tbl_fhv_partitioned |>
-  filter(pickup_date == as.Date("2019-10-15")) |>
-  collect()
 ```
 
-To answer the question, we need to return the number of rows in the dataframe we've returned:
+Now we apply the filter using some SQL and count the number of rows returned:
 
-```{r q3_answer}
-nrow(oct_15)
+```{r filter_15_oct}
+library(DBI)
+
+dbGetQuery(
+  sc,
+  "SELECT * FROM spark_fhv2019_partitioned WHERE date(from_utc_timestamp(to_timestamp(pickup_datetime), 'America/New_York')) = '2019-10-15'"
+  ) |> 
+  nrow()
 ```
+
 
 ## Question 4
 
@@ -114,7 +110,7 @@ What is the length of the longest trip in the dataset in hours?
 To determine this, we first need to calculate the number of hours for each trip. Unfortunately we can't use lubridate functions when we're querying Spark, but by calling unix_timestamp() on the pickup and dropoff times and then dividing by 3,600 we can calculate the difference ourselves:
 
 
-```{r}
+```{r hours_difference}
 fhv_hours_diff <- tbl_fhv_partitioned |> 
   mutate(
     hours_difference = (
@@ -134,6 +130,46 @@ fhv_hours_diff_arranged <- fhv_hours_diff |>
 fhv_hours_diff_arranged$hours_difference
 ```
 
+
+## Question 6
+
+Now let's load the zone lookup data into a temp view in Spark:
+
+```{r load_zones}
+#| output: false
+
+zones <- spark_read_csv(
+  sc,
+  name = "spark_fhv_zones",
+  path = here::here("data/fhv_zones.csv"),
+  overwrite = TRUE
+)
+
+```
+
+Next, let's join the spark_fhv_zones table with the spark_fhv2019_partitioned table:
+
+```{r join_tables}
+fhv_with_zones <- left_join(
+  tbl_fhv_partitioned,
+  zones,
+  by = c("PUlocationID" = "LocationID"))
+
+fhv_with_zones
+```
+
+What is the name of the LEAST frequent pickup location Zone? To determine this, we'll group by Zone and count the rows:
+
+```{r}
+zone_counts <- fhv_with_zones |> 
+  dplyr::group_by(Zone) |> 
+  dplyr::summarise(count = n()) |> 
+  dplyr::arrange(count) |> 
+  head(1) |> 
+  collect()
+```
+
+From this we can see that the answer is `r zone_counts$Zone`.
 
 ## Finish
 
